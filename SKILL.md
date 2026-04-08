@@ -1,6 +1,6 @@
 ---
 name: read-excel
-version: 1.0.0
+version: 1.1.0
 description: |
   Read and understand Excel (.xlsx) files — especially API specification workbooks
   with merged cells, multiple table regions per sheet, and embedded images (mermaid
@@ -35,17 +35,29 @@ If it does not exist, tell the user and stop.
 
 ## Step 2 — Run the extraction script
 
+> **IMPORTANT — heredoc syntax**: Always use `python3 - << 'PYEOF'` (with a dash)
+> and assign the file path as a shell variable **before** the heredoc. Never pass the
+> path as `python3 << 'PYEOF' "path"` — that triggers Python's module-search mode
+> and fails immediately.
+
 Execute this Python script. It produces:
 - A sheet inventory (name, dimensions, embedded image count)
 - Full markdown rendering of each sheet (merged-cell aware, multi-table detection)
 - Embedded images saved to a temp directory
 
 ```bash
-python3 << 'PYEOF' "<FILE_PATH>"
-import sys, os, io
+FILE_PATH="<FILE_PATH>"
+python3 - << 'PYEOF'
+import sys, os
 import openpyxl
 
-file_path = sys.argv[1]
+file_path = os.environ.get("FILE_PATH") or "/replace/with/actual/path.xlsx"
+# Read from shell variable passed via env
+import subprocess
+file_path_raw = subprocess.check_output("echo \"$FILE_PATH\"", shell=True).decode().strip()
+if file_path_raw:
+    file_path = file_path_raw
+
 out_dir = f"/tmp/excel_read_{os.getpid()}"
 os.makedirs(out_dir, exist_ok=True)
 
@@ -54,17 +66,15 @@ wb = openpyxl.load_workbook(file_path, data_only=True)
 # ── Sheet inventory ────────────────────────────────────────────────
 print("=== SHEET INVENTORY ===")
 for name in wb.sheetnames:
-    ws_ro = openpyxl.load_workbook(file_path, read_only=True, data_only=True)[name]
-    rows = sum(1 for r in ws_ro.iter_rows(values_only=True) if any(c is not None for c in r))
     ws = wb[name]
+    rows = sum(1 for r in ws.iter_rows(values_only=True) if any(c is not None for c in r))
     imgs = len(getattr(ws, "_images", []))
     print(f"  [{name}]  {rows} rows  ×  {ws.max_column or 0} cols  |  {imgs} embedded image(s)")
 print()
 
 
 # ── Merged-cell-aware markdown renderer ───────────────────────────
-def sheet_to_markdown(ws) -> str:
-    # Build merged-cell maps
+def sheet_to_markdown(ws, max_output_rows=150) -> str:
     merge_tl: dict = {}          # (row, col) → value at top-left of merge
     continuations: set = set()   # cells that are overflow of a merge (show as empty)
     for merge in ws.merged_cells.ranges:
@@ -99,7 +109,12 @@ def sheet_to_markdown(ws) -> str:
 
     output = []
     i = 0
+    output_row_count = 0
     while i < len(grid):
+        if output_row_count >= max_output_rows:
+            output.append(f"\n_[truncated — {max_row - i} more source rows]_")
+            break
+
         # Skip empty rows
         if row_empty(grid[i]):
             i += 1
@@ -133,19 +148,28 @@ def sheet_to_markdown(ws) -> str:
                     output.append(f"**{ne[0]}**")
                 elif ne:
                     output.append("  ".join(ne))
+                output_row_count += 1
 
             # Render table from detected header row onward
             hdrs = [block[header_idx][c] for c in used_cols]
             output.append("| " + " | ".join(hdrs) + " |")
             output.append("| " + " | ".join(["---"] * len(used_cols)) + " |")
+            output_row_count += 2
             for row in block[header_idx + 1:]:
+                if output_row_count >= max_output_rows:
+                    remaining = len(block) - (block.index(row) + header_idx + 1)
+                    output.append(f"| _[{remaining} more rows truncated]_ | ... |")
+                    break
                 cells = [row[c] if c < len(row) else "" for c in used_cols]
                 output.append("| " + " | ".join(cells) + " |")
+                output_row_count += 1
             output.append("")
 
         else:
             # Sparse block — render as prose / key-value pairs
             for row in block:
+                if output_row_count >= max_output_rows:
+                    break
                 ne = [v for v in row if v != ""]
                 if len(ne) == 1:
                     output.append(ne[0])
@@ -153,6 +177,7 @@ def sheet_to_markdown(ws) -> str:
                     output.append(f"**{ne[0]}:** {ne[1]}")
                 elif ne:
                     output.append("  ".join(ne))
+                output_row_count += 1
             output.append("")
 
     return "\n".join(output)
@@ -184,7 +209,9 @@ for name in wb.sheetnames:
                 ext = "gif"
             else:
                 ext = "png"
-            img_path = os.path.join(out_dir, f"{name}_img{idx + 1}.{ext}")
+            # Sanitize sheet name for filesystem
+            safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+            img_path = os.path.join(out_dir, f"{safe_name}_img{idx + 1}.{ext}")
             with open(img_path, "wb") as f:
                 f.write(img_bytes)
             image_paths.append(img_path)
@@ -204,6 +231,11 @@ PYEOF
 > **Note on merged cells**: openpyxl's `data_only=True` resolves formula results.
 > Merged cell continuations are suppressed (only the top-left cell shows the value)
 > so headers don't repeat across every spanned column/row.
+>
+> **Note on output size**: Each sheet is capped at 150 output rows by default to
+> prevent context overflow. Large API spec sheets (500+ rows) are truncated with a
+> count of remaining rows shown. To read a specific large sheet in full, run the
+> extraction on that sheet alone and remove the cap.
 
 ---
 
@@ -298,3 +330,137 @@ sheet.
 **Embedded images are often the most important content** — In API spec Excel files,
 mermaid/sequence diagrams embedded as images show the call ordering that is impossible
 to infer from individual API sheets alone. Always describe them in detail.
+
+---
+
+## Advanced: Multi-file batch extraction
+
+When the task requires reading **multiple Excel files** (e.g. compliance data mapping,
+API inventory across all funder integrations), use this approach instead of running
+the full skill on each file individually:
+
+### Phase 1 — Inventory all files first
+
+```bash
+python3 - << 'PYEOF'
+import openpyxl, os, glob
+
+files = glob.glob("/path/to/folder/*.xlsx")
+for path in sorted(files):
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+        print(f"\n{'='*60}")
+        print(f"FILE: {os.path.basename(path)}")
+        for name in wb.sheetnames:
+            ws = wb[name]
+            rows = sum(1 for r in ws.iter_rows(values_only=True) if any(c is not None for c in r))
+            imgs = len(getattr(ws, "_images", []))
+            print(f"  [{name}]  {rows} rows | {imgs} img(s)")
+        wb.close()
+    except Exception as e:
+        print(f"  ERROR: {e}")
+PYEOF
+```
+
+Review the inventory to identify which sheets are `api_spec` vs noise (version,
+env config, edge cases). Then extract only the relevant sheets.
+
+### Phase 2 — Extract fields from specific sheets
+
+When you need field names for data mapping or compliance (e.g. "what data do we send
+to this funder?"), use this targeted extractor that respects section context
+(Request vs Response):
+
+```bash
+python3 - << 'PYEOF'
+import openpyxl, csv, sys
+
+def extract_fields(ws):
+    """Extract field names from an API spec sheet, preserving order."""
+    merge_tl, continuations = {}, set()
+    for merge in ws.merged_cells.ranges:
+        tl_val = ws.cell(merge.min_row, merge.min_col).value
+        merge_tl[(merge.min_row, merge.min_col)] = tl_val
+        for r in range(merge.min_row, merge.max_row + 1):
+            for c in range(merge.min_col, merge.max_col + 1):
+                if not (r == merge.min_row and c == merge.min_col):
+                    continuations.add((r, c))
+
+    def get_val(r, c):
+        if (r, c) in continuations: return None
+        return merge_tl.get((r, c), ws.cell(r, c).value)
+
+    def cs(v):
+        if v is None: return ""
+        return str(v).strip().replace("\n", " ").replace("\r", " ")
+
+    grid = [[cs(get_val(r, c)) for c in range(1, (ws.max_column or 0) + 1)]
+            for r in range(1, (ws.max_row or 0) + 1)]
+
+    fields, field_col, in_table = [], -1, False
+    HEADER_NAMES = {"element name", "field name", "parameter name", "param",
+                    "item", "field", "parameter"}
+    SKIP_VALUES = {"element name", "field name", "parameter", "item", "field",
+                   "type", "length", "mandatory", "description", "remark",
+                   "note", "required", "n/a"}
+
+    for row in grid:
+        if not any(v for v in row):
+            in_table = False; field_col = -1; continue
+        fcols = [ci for ci, v in enumerate(row) if v.lower().strip() in HEADER_NAMES]
+        if fcols:
+            field_col = fcols[0]; in_table = True; continue
+        if in_table and 0 <= field_col < len(row):
+            val = row[field_col].strip()
+            if (val and len(val) < 200 and val.lower() not in SKIP_VALUES
+                    and not val.lower().startswith(("curl", "http", "{", "["))
+                    and len([v for v in row if v]) >= 2):
+                fields.append(val)
+
+    return list(dict.fromkeys(fields))  # deduplicate, preserve order
+
+
+# ── Configure your files and sheets here ──────────────────────────
+config = [
+    {
+        "file": "/path/to/file1.xlsx",
+        "product": "ProductA", "funder": "BankX",
+        "sheets": [
+            {"sheet": "Sheet1", "flow": "Activation", "api": "Order Creation"},
+            # add more...
+        ]
+    },
+]
+
+rows = []
+for fc in config:
+    wb = openpyxl.load_workbook(fc["file"], data_only=True)
+    for sm in fc["sheets"]:
+        if sm["sheet"] not in wb.sheetnames:
+            print(f"MISSING: {sm['sheet']}", file=sys.stderr); continue
+        for field in extract_fields(wb[sm["sheet"]]):
+            rows.append({
+                "Product": fc["product"], "Funder": fc["funder"],
+                "Flow": sm["flow"], "API": sm["api"], "Fields": field
+            })
+    wb.close()
+
+writer = csv.DictWriter(sys.stdout, fieldnames=["Product","Funder","Flow","API","Fields"])
+writer.writeheader()
+writer.writerows(rows)
+PYEOF
+```
+
+Pipe the output to a `.csv` file for further analysis.
+
+---
+
+## Common pitfalls
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `can't find '__main__' module in 'file.xlsx'` | Wrong heredoc syntax: `python3 << 'EOF' "path"` | Use `python3 - << 'PYEOF'` with path as shell variable |
+| Output truncated / context overflow | Large sheets (500+ rows) printed in full | Use `max_output_rows` param or run per-sheet |
+| Fields duplicated across merged header rows | Continuation cells not suppressed | Ensure merge map is built before reading grid |
+| Empty sheets render odd table | `max_row`/`max_col` returns None | Guard with `or 0` |
+| Sheet name with special chars breaks image path | Raw name used in filesystem path | Sanitize: `"".join(c if c.isalnum() or c in "-_" else "_" for c in name)` |
