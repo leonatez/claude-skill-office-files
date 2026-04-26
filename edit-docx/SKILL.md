@@ -1,10 +1,11 @@
 ---
 name: edit-docx
-version: 1.0.0
+version: 2.0.0
 description: |
   Add sections, paragraphs, tables, and code blocks to Word (.docx) files while
   matching the original document's heading styles, fonts, sizes, indentation, colours,
-  and alignment. Use when asked to "add", "insert", "update", or "edit" a Word document.
+  and alignment. Also supports tracked changes (redlining) for legal, business, and
+  academic documents. Use when asked to "add", "insert", "update", "edit", or "redline".
 dependencies:
   - python-docx==1.2.0
   - lxml==6.0.2
@@ -18,7 +19,15 @@ The cardinal rule: **always inspect before you write** — never guess styles.
 
 ---
 
-## Step 0 — Ensure dependencies
+## Workflow Decision Tree
+
+- **Adding new content (sections, paragraphs, tables)** → Sections A–D below
+- **Tracking changes for review (redlining)** → Section E (Tracked Changes Workflow)
+- **Visual check of output** → Section F
+
+---
+
+## Section A — Dependencies
 
 ```bash
 pip3 install python-docx==1.2.0 lxml==6.0.2 2>/dev/null | grep -E "^(Successfully|Already|Requirement)" || true
@@ -26,7 +35,7 @@ pip3 install python-docx==1.2.0 lxml==6.0.2 2>/dev/null | grep -E "^(Successfull
 
 ---
 
-## Step 1 — Resolve and verify the file
+## Section B — Resolve and verify the file
 
 ```bash
 ls -lh "<FILE_PATH>"
@@ -34,10 +43,7 @@ ls -lh "<FILE_PATH>"
 
 ---
 
-## Step 2 — Inspect paragraph styles (ALWAYS before editing)
-
-Run this to capture the exact XML properties of paragraphs near the insertion point.
-You will replicate these in Step 3.
+## Section C — Inspect paragraph styles (ALWAYS before editing)
 
 ```bash
 FILE_PATH="<FILE_PATH>"
@@ -51,65 +57,56 @@ from lxml import etree
 doc = Document(file_path)
 print(f"Total paragraphs: {len(doc.paragraphs)}\n")
 
-# Print all paragraphs with style info
 for i, para in enumerate(doc.paragraphs):
     text = para.text.strip()
     style = para.style.name
     pf = para.paragraph_format
     align  = pf.alignment
     indent = pf.left_indent
-
     run_info = ""
     for run in para.runs:
         if run.text.strip():
             b  = run.bold
-            sz = run.font.size   # in EMU; divide by 12700 for pt
+            sz = run.font.size
             it = run.italic
             try:    col = str(run.font.color.rgb)
             except: col = "inherit"
             run_info = f"bold={b} size_emu={sz} italic={it} color={col}"
             break
-
     if text:
         print(f"[{i:3d}] style='{style}' align={align} indent={indent}")
         print(f"       {run_info}")
         print(f"       '{text[:90]}'")
 
-# Show raw XML for key paragraphs (section headers and body text samples)
-print("\n=== RAW XML of section-header-style paragraphs ===")
+print("\n=== RAW XML of bold/section-header paragraphs ===")
 for i, para in enumerate(doc.paragraphs):
     text = para.text.strip()
     if text and any(para.runs) and para.runs[0].bold:
-        # Condensed XML: only pPr and first run
         xml = etree.tostring(para._element, pretty_print=True).decode()
-        # Extract only the relevant tags
         relevant = [l for l in xml.split('\n') if any(tag in l for tag in
             ['<w:pPr', '<w:ind ', '<w:jc ', '<w:rPr', '<w:b/>', '<w:b ',
              '<w:sz ', '<w:color', '<w:t>', '</w:t', '</w:r>', '</w:pPr'])]
         print(f"\n  Para {i}: '{text[:40]}'")
         for line in relevant[:20]:
             print(f"    {line.strip()}")
-        if i > 5:  # enough samples
+        if i > 5:
             break
-
 PYEOF
 ```
 
 Write down these values before proceeding:
-- `w:left` value (twips) from `<w:ind>`
-- `w:val` from `<w:jc>` (alignment: "both" = justify, "l" = left)
-- `w:val` from `<w:sz>` (half-points, e.g. 20 = 10pt)
+- `w:left` from `<w:ind>` (twips)
+- `w:val` from `<w:jc>` ("both"=justify, "l"=left)
+- `w:val` from `<w:sz>` (half-points: 20=10pt, 24=12pt)
 - Whether `<w:b/>` is present (bold)
-- `w:val` from `<w:color>` (hex, e.g. "212121")
+- `w:val` from `<w:color>` (hex)
 
 ---
 
-## Step 3 — Write the edit script
+## Section D — Write the edit script
 
-Build a Python script that inserts new content using raw XML elements — this is the
-most reliable way to match the original document's exact style.
-
-### Core pattern
+Build a Python script that inserts content using raw XML — the most reliable way to
+match the original document's exact style.
 
 ```python
 from docx import Document
@@ -120,13 +117,6 @@ W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 def make_paragraph(text, bold=False, size_half_pt=20, color_hex=None,
                    left_twips=283, italic=False, align="both",
                    font="Times New Roman"):
-    """Build a <w:p> element matching the document's existing style.
-    
-    Args:
-        size_half_pt: font size in half-points (20 = 10pt, 24 = 12pt)
-        left_twips:   left indent in twips (283 ≈ 0.2 in, 456 ≈ 0.32 in)
-        align:        "both" (justify), "l" (left), "ctr" (center), "r" (right)
-    """
     color_xml  = f'<w:color w:val="{color_hex}"/>' if color_hex else ""
     bold_xml   = "<w:b/><w:bCs/>" if bold else ""
     italic_xml = "<w:i/><w:iCs/>" if italic else ""
@@ -154,7 +144,6 @@ def make_paragraph(text, bold=False, size_half_pt=20, color_hex=None,
 
 
 def make_code_paragraph(text, size_half_pt=18, left_twips=283):
-    """Monospace paragraph for code blocks (e.g. mermaid diagrams)."""
     return etree.fromstring(f"""<w:p xmlns:w="{W}">
   <w:pPr>
     <w:ind w:left="{left_twips}"/>
@@ -186,26 +175,21 @@ def empty_paragraph(left_twips=283, align="both"):
 
 
 def insert_after(body, anchor_para_elem, new_elements):
-    """Insert a list of <w:p> elements immediately after anchor_para_elem."""
     idx = list(body).index(anchor_para_elem) + 1
     for elem in new_elements:
         body.insert(idx, elem)
         idx += 1
-```
 
-### Insertion pattern (inserting after paragraph N)
 
-```python
+# Usage
 doc = Document(file_path)
 body = doc.element.body
-anchor = doc.paragraphs[N]._element   # paragraph to insert after
+anchor = doc.paragraphs[N]._element  # insert after paragraph N
 
 new_elems = [
     empty_paragraph(),
     make_paragraph("NEW SECTION HEADING:", bold=True, size_half_pt=20, left_twips=283),
-    make_paragraph("Body text here.", bold=False, size_half_pt=20,
-                   color_hex="212121", left_twips=283),
-    # Mermaid / code block:
+    make_paragraph("Body text here.", size_half_pt=20, color_hex="212121", left_twips=283),
     empty_paragraph(),
     make_code_paragraph("```mermaid"),
     make_code_paragraph("sequenceDiagram"),
@@ -218,20 +202,16 @@ doc.save(file_path)
 print("Saved.")
 ```
 
-### Important: XML-special characters
+### XML special character escaping
 
-Escape these in any text string passed to `make_paragraph` or `make_code_paragraph`:
+| Character | Escape |
+|-----------|--------|
+| `&` | `&amp;` |
+| `<` | `&lt;` |
+| `>` | `&gt;` |
+| `"` | `&quot;` |
 
-| Character | Escape    |
-|-----------|-----------|
-| `&`       | `&amp;`   |
-| `<`       | `&lt;`    |
-| `>`       | `&gt;`    |
-| `"`       | `&quot;`  |
-
----
-
-## Step 4 — Verify the result
+### Verify insertion
 
 ```bash
 FILE_PATH="<FILE_PATH>"
@@ -241,14 +221,114 @@ file_path = subprocess.check_output("echo \"$FILE_PATH\"", shell=True).decode().
 from docx import Document
 doc = Document(file_path)
 print(f"Total paragraphs: {len(doc.paragraphs)}")
-# Print last 30 paragraphs to confirm insertion
 for i, p in enumerate(doc.paragraphs[-30:]):
     idx = len(doc.paragraphs) - 30 + i
     print(f"  [{idx}] '{p.text[:80]}'")
 PYEOF
 ```
 
-Confirm the new paragraphs appear at the correct position with the correct text.
+---
+
+## Section E — Tracked Changes (Redlining) Workflow
+
+Use this for legal, business, academic, or government documents where reviewers must
+accept or reject each change individually.
+
+**Principle: Minimal, precise edits.** Only mark text that actually changes.
+Never replace an entire sentence to change one word.
+
+### Example — changing "30 days" to "60 days":
+
+```python
+# ❌ BAD — replaces entire sentence, hard to review
+'<w:del><w:r><w:delText>The term is 30 days.</w:delText></w:r></w:del>'
+'<w:ins><w:r><w:t>The term is 60 days.</w:t></w:r></w:ins>'
+
+# ✅ GOOD — only marks what changed, preserves surrounding runs with original RSID
+'<w:r w:rsidR="00AB12CD"><w:t xml:space="preserve">The term is </w:t></w:r>'
+'<w:del w:id="1" w:author="Claude" w:date="2026-01-01T00:00:00Z">'
+'  <w:r><w:delText>30</w:delText></w:r>'
+'</w:del>'
+'<w:ins w:id="2" w:author="Claude" w:date="2026-01-01T00:00:00Z">'
+'  <w:r><w:t>60</w:t></w:r>'
+'</w:ins>'
+'<w:r w:rsidR="00AB12CD"><w:t xml:space="preserve"> days.</w:t></w:r>'
+```
+
+### Step E1 — Convert to markdown to read the document
+
+```bash
+pandoc --track-changes=all "<FILE_PATH>" -o current.md
+```
+
+Read `current.md` to understand the full document content and identify all changes needed.
+
+### Step E2 — Unpack the document for XML editing
+
+```bash
+SCRIPTS="<path_to_skill>/ooxml/scripts"
+python3 "$SCRIPTS/unpack.py" "<FILE_PATH>" unpacked/
+# Note the suggested RSID printed — use it for all your w:rsidR values
+```
+
+### Step E3 — Plan changes in batches (3–10 changes per batch)
+
+Group related changes. Do NOT use markdown line numbers — they don't map to XML.
+Use grep patterns with unique surrounding text to locate changes in XML:
+
+```bash
+grep -n "30 days" unpacked/word/document.xml
+```
+
+### Step E4 — Implement each batch
+
+For each batch:
+1. `grep` for the exact text in `unpacked/word/document.xml` to see how it's split across `<w:r>` elements
+2. Write and run a Python script using the OOXML patterns below
+3. Verify with `pandoc --track-changes=all` before moving to the next batch
+
+```python
+from lxml import etree
+
+W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+RSID = "AABBCCDD"   # Use the RSID suggested by unpack.py
+AUTHOR = "Claude"
+DATE = "2026-01-01T00:00:00Z"
+
+def make_del(old_text, change_id):
+    return etree.fromstring(f"""<w:del xmlns:w="{W}"
+        w:id="{change_id}" w:author="{AUTHOR}" w:date="{DATE}">
+  <w:r><w:delText xml:space="preserve">{old_text}</w:delText></w:r>
+</w:del>""")
+
+def make_ins(new_text, change_id):
+    return etree.fromstring(f"""<w:ins xmlns:w="{W}"
+        w:id="{change_id}" w:author="{AUTHOR}" w:date="{DATE}">
+  <w:r w:rsidR="{RSID}"><w:t xml:space="preserve">{new_text}</w:t></w:r>
+</w:ins>""")
+```
+
+### Step E5 — Repack and verify
+
+```bash
+SCRIPTS="<path_to_skill>/ooxml/scripts"
+python3 "$SCRIPTS/pack.py" unpacked/ "<OUTPUT_FILE>"
+pandoc --track-changes=all "<OUTPUT_FILE>" -o verification.md
+grep "old phrase" verification.md   # should NOT appear
+grep "new phrase" verification.md   # should appear
+```
+
+---
+
+## Section F — Visual verification (convert to images)
+
+```bash
+soffice --headless --convert-to pdf "<FILE_PATH>"
+pdftoppm -jpeg -r 150 output.pdf page
+# Creates page-1.jpg, page-2.jpg, …
+```
+
+Read the images to visually confirm the document looks correct.
 
 ---
 
@@ -256,8 +336,9 @@ Confirm the new paragraphs appear at the correct position with the correct text.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `&` in text breaks XML | Unescaped ampersand | Use `&amp;` in the text string |
-| New paragraph appears at wrong position | Wrong `index()` in insert_after | Print `list(body).index(anchor)` to verify |
-| Paragraph style doesn't match | Guessed values instead of inspecting | Always run Step 2 first |
-| Bullet/list paragraph style not replicated | List styles need `<w:numPr>` XML | Copy the `<w:pPr>` block verbatim from an existing list paragraph's XML |
-| Vietnamese/special chars show as `?` | Bytes written without UTF-8 | python-docx handles encoding automatically; ensure source file opened correctly |
+| `&` in text breaks XML | Unescaped ampersand | Use `&amp;` |
+| New paragraph at wrong position | Wrong `index()` in `insert_after` | Print `list(body).index(anchor)` to verify |
+| Style doesn't match | Guessed values | Always run Section C first |
+| Bullet style not replicated | List styles need `<w:numPr>` | Copy `<w:pPr>` from an existing list paragraph |
+| Vietnamese/special chars show as `?` | Encoding issue | python-docx handles UTF-8; check source file encoding |
+| Tracked change shows wrong range | Replaced too much text | Only mark the minimal changed text, reuse surrounding `<w:r>` elements |

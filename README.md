@@ -1,18 +1,19 @@
 # Office File Skills — Claude Code
 
-Six Claude Code skills for reading and editing Office files (`.xlsx`, `.docx`, `.pptx`).
+Seven Claude Code skills for reading, editing, and processing Office files (`.xlsx`, `.docx`, `.pptx`) and PDFs.
 All skills share the same core principle: **inspect first, replicate style exactly**.
 
 ## Skills
 
 | Skill | Command | Purpose |
 |-------|---------|---------|
-| read-excel | `/read-excel` | Read & analyze `.xlsx` files — merged cells, multi-table sheets, embedded images |
-| edit-excel | `/edit-excel` | Add sheets, write data to `.xlsx` while matching original styling |
-| read-docx  | `/read-docx`  | Read & analyze `.docx` files — paragraphs, tables, run formatting |
-| edit-docx  | `/edit-docx`  | Add sections, paragraphs, code blocks to `.docx` matching original styles |
-| read-pptx  | `/read-pptx`  | Read & analyze `.pptx` files — slides, shapes, positions, fonts |
-| edit-pptx  | `/edit-pptx`  | Add/insert slides to `.pptx` matching original shape geometry and colours |
+| read-excel | `/read-excel` | Read & analyze `.xlsx` — merged cells, multi-table sheets, embedded images, API spec parsing |
+| edit-excel | `/edit-excel` | Edit `.xlsx` with formula-first enforcement and LibreOffice formula recalculation |
+| read-docx  | `/read-docx`  | Read & analyze `.docx` — pandoc markdown conversion + structured python-docx extraction |
+| edit-docx  | `/edit-docx`  | Edit `.docx` with exact style replication + tracked changes / redlining workflow |
+| read-pptx  | `/read-pptx`  | Read & analyze `.pptx` — slides, shapes, positions, fonts |
+| edit-pptx  | `/edit-pptx`  | Edit `.pptx` + template bulk-replace pipeline (inventory → rearrange → replace → thumbnail) |
+| pdf        | `/pdf`        | Extract, merge, split, fill forms, and create PDF files |
 
 ---
 

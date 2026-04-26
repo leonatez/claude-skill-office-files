@@ -1,8 +1,25 @@
 # Office file skill dependencies
 # Install all with: pip3 install -r requirements.txt
 #
-# Tested versions (2025-06):
+# Core (required for all skills)
 openpyxl==3.1.5      # xlsx read/write
 python-pptx==1.0.2   # pptx read/write
 python-docx==1.2.0   # docx read/write
-lxml==6.0.2          # XML manipulation (shared dep, usually auto-installed)
+lxml==6.0.2          # XML manipulation
+
+# Extended (required for new features)
+pandas               # Excel data analysis (edit-excel)
+pillow               # Thumbnail generation (edit-pptx)
+pypdf>=4.0.0         # PDF processing (pdf)
+pdfplumber>=0.10.0   # PDF text/table extraction (pdf)
+reportlab>=4.0.0     # PDF creation (pdf)
+
+# Optional (install separately if needed)
+# defusedxml         # Secure XML parsing for ooxml pack/unpack scripts
+# pytesseract        # OCR for scanned PDFs
+# pdf2image          # Convert PDF pages to images for OCR
+
+# External tools (install via system package manager, not pip)
+# pandoc             # sudo apt-get install pandoc  (read-docx, edit-docx)
+# LibreOffice        # sudo apt-get install libreoffice  (edit-excel recalc, pptx thumbnail)
+# poppler-utils      # sudo apt-get install poppler-utils  (pdftoppm for thumbnail)

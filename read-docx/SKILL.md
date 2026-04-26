@@ -1,9 +1,10 @@
 ---
 name: read-docx
-version: 1.0.0
+version: 2.0.0
 description: |
   Read and understand Word (.docx) files. Extracts all paragraphs, headings, tables,
   run-level formatting (font, size, bold, colour, italic), and document structure.
+  Supports both structured extraction (python-docx) and full markdown conversion (pandoc).
   Produces a structured markdown summary. Use when asked to "read", "analyze",
   "understand", or "summarize" a Word document.
 dependencies:
@@ -36,7 +37,30 @@ ls -lh "<FILE_PATH>"
 
 ---
 
-## Step 2 — Extract document structure
+## Step 2 — Choose extraction method
+
+### Option A: Full text with pandoc (best for content understanding)
+
+If `pandoc` is available, use it — it produces clean markdown preserving structure,
+lists, tables, and even tracked changes:
+
+```bash
+# Check if pandoc is available
+pandoc --version 2>/dev/null && echo "pandoc available" || echo "pandoc not found"
+
+# Convert to markdown (shows accepted state of tracked changes)
+pandoc "<FILE_PATH>" -o /tmp/doc_content.md
+cat /tmp/doc_content.md
+
+# To see ALL tracked changes (insertions and deletions):
+pandoc --track-changes=all "<FILE_PATH>" -o /tmp/doc_changes.md
+cat /tmp/doc_changes.md
+```
+
+### Option B: Structured extraction with python-docx (best for formatting details)
+
+Use this when you need exact style names, font sizes, colours, and indentation values
+(e.g., before editing with `/edit-docx`):
 
 ```bash
 FILE_PATH="<FILE_PATH>"
@@ -63,7 +87,6 @@ for i, para in enumerate(doc.paragraphs):
     align  = para.paragraph_format.alignment
     indent = para.paragraph_format.left_indent
 
-    # Collect run formatting from first non-empty run
     run_info = ""
     for run in para.runs:
         if run.text.strip():
@@ -124,6 +147,7 @@ context if the document will later be edited with `/edit-docx`.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Vietnamese / non-ASCII text garbled | Terminal encoding | The extraction script handles UTF-8 natively; ensure terminal is UTF-8 |
+| Vietnamese / non-ASCII text garbled | Terminal encoding | The extraction script handles UTF-8 natively |
 | Paragraphs missing | Paragraphs inside table cells are not in `doc.paragraphs` | Iterate `table.rows[i].cells[j].paragraphs` separately |
 | Run font returns None | Style inherited from paragraph/document default | `None` means "inherit" — check paragraph style for the effective value |
+| Tracked changes not visible | pandoc shows accepted state by default | Use `--track-changes=all` to see insertions/deletions |
