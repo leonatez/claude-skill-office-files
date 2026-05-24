@@ -26,9 +26,10 @@ for skill in $SKILLS; do
       mkdir -p "$dst/scripts"
       cp -r "$REPO_DIR/$skill/scripts/." "$dst/scripts/"
       echo "  Installed /$skill (+ scripts)  ->  $dst"
-    elif [ -f "$REPO_DIR/$skill/recalc.py" ]; then
-      cp "$REPO_DIR/$skill/recalc.py" "$dst/recalc.py"
-      echo "  Installed /$skill (+ recalc.py)  ->  $dst"
+    elif [ -f "$REPO_DIR/$skill/recalc.py" ] || [ -f "$REPO_DIR/$skill/docx-apply-json-spec.py" ]; then
+      [ -f "$REPO_DIR/$skill/recalc.py" ] && cp "$REPO_DIR/$skill/recalc.py" "$dst/recalc.py"
+      [ -f "$REPO_DIR/$skill/docx-apply-json-spec.py" ] && cp "$REPO_DIR/$skill/docx-apply-json-spec.py" "$dst/docx-apply-json-spec.py"
+      echo "  Installed /$skill (+ scripts)  ->  $dst"
     else
       echo "  Installed /$skill  ->  $dst"
     fi
@@ -42,6 +43,13 @@ if [ -d "$REPO_DIR/ooxml/scripts" ]; then
   mkdir -p "$SKILLS_DIR/ooxml/scripts"
   cp -r "$REPO_DIR/ooxml/scripts/." "$SKILLS_DIR/ooxml/scripts/"
   echo "  Installed shared ooxml scripts  ->  $SKILLS_DIR/ooxml/scripts"
+fi
+
+# Install shared mermaid rendering script
+if [ -f "$REPO_DIR/mermaid/mermaid-render.py" ]; then
+  mkdir -p "$SKILLS_DIR/mermaid"
+  cp "$REPO_DIR/mermaid/mermaid-render.py" "$SKILLS_DIR/mermaid/mermaid-render.py"
+  echo "  Installed shared mermaid/mermaid-render.py  ->  $SKILLS_DIR/mermaid/"
 fi
 
 echo ""

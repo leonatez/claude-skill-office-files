@@ -1,11 +1,12 @@
 ---
 name: edit-pptx
-version: 2.0.0
+version: 2.1.0
 description: |
   Add, insert, or edit slides in PowerPoint (.pptx) files matching the original
   presentation's layout, shape positions, font sizes, colours, and formatting.
-  Also supports template-based bulk generation: inventory → replace → rearrange pipeline.
-  Use when asked to "add a slide", "insert", "update", "edit", or "generate from template".
+  Also supports template-based bulk generation and embedding Mermaid diagrams as images
+  on any slide. Use when asked to "add a slide", "insert", "update", "edit",
+  "generate from template", or "add a diagram / flowchart".
 dependencies:
   - python-pptx==1.0.2
   - lxml==6.0.2
@@ -25,6 +26,7 @@ The cardinal rule: **always inspect before you write** — never guess positions
 - **Add/edit a few slides in an existing file** → use Sections A–D below
 - **Populate an existing template with new content** → use Section E (Template Workflow)
 - **Visual thumbnail overview of any presentation** → use Section F
+- **Embed a Mermaid diagram as an image on a slide** → use Section G
 
 ---
 
@@ -377,6 +379,88 @@ python3 "$SCRIPTS/thumbnail.py" presentation.pptx [output_prefix] [--cols 4]
 
 Grid limits by column count: 3=12 slides, 4=20, 5=30 (default), 6=42.
 Multiple grid files are created automatically for large decks.
+
+---
+
+## Section G — Embed Mermaid Diagram as Image
+
+Use this when the user asks for a flowchart, sequence diagram, architecture diagram,
+or any diagram on a slide (e.g. in a PRD deck or technical presentation). The Mermaid
+script is rendered to PNG and placed as a picture shape at the desired position.
+
+### Step G1 — Locate the shared render script
+
+```bash
+MERMAID_SCRIPT="$(python3 -c "
+import pathlib, sys
+candidates = [
+    pathlib.Path.home() / '.claude/skills/mermaid/mermaid-render.py',
+    pathlib.Path('mermaid/mermaid-render.py'),
+]
+found = next((str(p) for p in candidates if p.exists()), None)
+print(found or sys.exit('mermaid-render.py not found — run install.sh first'))
+")"
+echo "Script: $MERMAID_SCRIPT"
+```
+
+### Step G2 — Write the diagram and render to PNG
+
+```bash
+cat > /tmp/diagram.mmd << 'MERMAID'
+sequenceDiagram
+    User->>API: POST /order
+    API->>DB: Insert order
+    DB-->>API: OK
+    API-->>User: 201 Created
+MERMAID
+
+python3 "$MERMAID_SCRIPT" --input /tmp/diagram.mmd --output /tmp/diagram.png --theme default
+ls -lh /tmp/diagram.png
+```
+
+Themes: `default` (white bg), `dark`, `forest`, `neutral`. Use `default` for
+light-background slides; `dark` for dark-themed decks.
+
+### Step G3 — Place the image on the slide
+
+```python
+from pptx import Presentation
+from pptx.util import Inches, Emu
+
+prs = Presentation(file_path)
+slides = list(prs.slides)
+
+# Inspect slide dimensions once (from Section C)
+slide_w = prs.slide_width   # typically 9144000 EMU (10 in) or 12192000 EMU (13.33 in)
+slide_h = prs.slide_height  # typically 5143500 EMU (5.63 in) or 6858000 EMU (7.5 in)
+
+target_slide = slides[N]  # 0-based index
+
+# Place image — adjust left/top/width to match the slide layout
+pic = target_slide.shapes.add_picture(
+    "/tmp/diagram.png",
+    left=Inches(0.5),
+    top=Inches(1.5),
+    width=Inches(9.0),   # stretch across slide; height auto-scaled to preserve aspect ratio
+)
+
+prs.save(file_path)
+print(f"Diagram added to slide {N + 1}.")
+```
+
+**Positioning guidance:**
+
+| Slide use case | left | top | width |
+|---|---|---|---|
+| Full-width diagram (below title) | `Inches(0.5)` | `Inches(1.5)` | `Inches(9.0)` |
+| Half-slide (right column) | `Inches(5.0)` | `Inches(1.5)` | `Inches(4.5)` |
+| Small inset diagram | `Inches(1.0)` | `Inches(2.0)` | `Inches(5.0)` |
+
+Do **not** pass `height` — python-pptx auto-scales it to preserve aspect ratio.
+
+### Step G4 — Verify visually
+
+Run Section F's thumbnail command to confirm the diagram appears correctly on the slide.
 
 ---
 

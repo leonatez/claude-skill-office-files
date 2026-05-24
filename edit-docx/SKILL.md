@@ -1,11 +1,12 @@
 ---
 name: edit-docx
-version: 2.0.0
+version: 2.1.0
 description: |
-  Add sections, paragraphs, tables, and code blocks to Word (.docx) files while
-  matching the original document's heading styles, fonts, sizes, indentation, colours,
-  and alignment. Also supports tracked changes (redlining) for legal, business, and
-  academic documents. Use when asked to "add", "insert", "update", "edit", or "redline".
+  Add sections, paragraphs, tables, code blocks, and Mermaid diagrams to Word (.docx)
+  files while matching the original document's heading styles, fonts, sizes, indentation,
+  colours, and alignment. Also supports tracked changes (redlining) for legal, business,
+  and academic documents. Use when asked to "add", "insert", "update", "edit", "redline",
+  or "add a diagram / flowchart / sequence diagram".
 dependencies:
   - python-docx==1.2.0
   - lxml==6.0.2
@@ -21,9 +22,11 @@ The cardinal rule: **always inspect before you write** — never guess styles.
 
 ## Workflow Decision Tree
 
-- **Adding new content (sections, paragraphs, tables)** → Sections A–D below
+- **Adding new content (sections, paragraphs, tables, images)** → Sections A–C, then **Section D (JSON spec, recommended)**
+- **Custom styling that doesn't fit the JSON spec** → Sections A–C, then **Section D-Advanced (raw XML)**
 - **Tracking changes for review (redlining)** → Section E (Tracked Changes Workflow)
 - **Visual check of output** → Section F
+- **Embed a Mermaid diagram as an image** → Section G
 
 ---
 
@@ -103,10 +106,92 @@ Write down these values before proceeding:
 
 ---
 
-## Section D — Write the edit script
+## Section D — Write a JSON spec and run docx-apply-json-spec.py (recommended)
 
-Build a Python script that inserts content using raw XML — the most reliable way to
-match the original document's exact style.
+This is the token-efficient path. You write a compact JSON spec; the script handles
+all OOXML internally — no XML in your output.
+
+### Locate the script
+
+```bash
+DOCX_EDIT="$(python3 -c "
+import pathlib, sys
+candidates = [
+    pathlib.Path.home() / '.claude/skills/edit-docx/docx-apply-json-spec.py',
+    pathlib.Path('edit-docx/docx-apply-json-spec.py'),
+]
+found = next((str(p) for p in candidates if p.exists()), None)
+print(found or sys.exit('docx-apply-json-spec.py not found — run install.sh first'))
+")"
+```
+
+### Supported element types
+
+| `type` | Required fields | Optional fields |
+|---|---|---|
+| `paragraph` | `text` | `bold`, `italic`, `size` (pt), `color` (hex), `font`, `align`, `style` |
+| `heading` | `text` | `level` (1–6, default 1) |
+| `image` | `path` | `width_inches`, `align` (center/left/right) |
+| `table` | `rows` | `headers`, `style` (default "Table Grid") |
+| `code` | `lines` | `size` (pt, default 9) — uses Courier New |
+| `empty` | — | — |
+| `pagebreak` | — | — |
+
+### Write the spec and run
+
+```bash
+python3 "$DOCX_EDIT" - << 'JSON'
+{
+  "file": "<FILE_PATH>",
+  "insert_after": 12,
+  "elements": [
+    {"type": "empty"},
+    {"type": "heading", "text": "Process Flow", "level": 1},
+    {"type": "paragraph", "text": "See diagram below.", "italic": true},
+    {"type": "image", "path": "/tmp/diagram.png", "width_inches": 5.5},
+    {"type": "empty"},
+    {"type": "table",
+     "headers": ["Step", "Actor", "Action"],
+     "rows": [
+       ["1", "User",  "Submit form"],
+       ["2", "API",   "Validate & persist"],
+       ["3", "Queue", "Async fulfil"]
+     ]
+    }
+  ]
+}
+JSON
+```
+
+**Insertion actions** (pick one):
+- `"insert_after": N` — insert after paragraph N (0-based, from Section C output)
+- `"insert_before": N` — insert before paragraph N
+- `"append": true` — append to end of document
+
+### Verify
+
+```bash
+FILE_PATH="<FILE_PATH>"
+python3 - << 'PYEOF'
+import subprocess
+file_path = subprocess.check_output("echo \"$FILE_PATH\"", shell=True).decode().strip()
+from docx import Document
+doc = Document(file_path)
+print(f"Total paragraphs: {len(doc.paragraphs)}")
+for i, p in enumerate(doc.paragraphs[-20:]):
+    idx = len(doc.paragraphs) - 20 + i
+    print(f"  [{idx}] [{p.style.name}] '{p.text[:70]}'")
+PYEOF
+```
+
+---
+
+## Section D-Advanced — Write the edit script (raw XML, complex cases only)
+
+Use this only when Section D's element types don't cover your needs (e.g. custom
+list styles, complex run formatting, nested tables). Build a Python script that
+inserts content using raw XML — the most reliable way to match the original
+document's exact style.
 
 ```python
 from docx import Document
@@ -329,6 +414,94 @@ pdftoppm -jpeg -r 150 output.pdf page
 ```
 
 Read the images to visually confirm the document looks correct.
+
+---
+
+## Section G — Embed Mermaid Diagram as Image
+
+Use this when the user asks for a flowchart, sequence diagram, ERD, or any diagram
+inside a `.docx` document (e.g. a PRD or FRD). The diagram is rendered to PNG first,
+then embedded as an inline image at the target paragraph.
+
+### Step G1 — Locate the shared render script
+
+```bash
+MERMAID_SCRIPT="$(python3 -c "
+import pathlib, sys
+candidates = [
+    pathlib.Path.home() / '.claude/skills/mermaid/mermaid-render.py',
+    pathlib.Path('mermaid/mermaid-render.py'),
+]
+found = next((str(p) for p in candidates if p.exists()), None)
+print(found or sys.exit('mermaid-render.py not found — run install.sh first'))
+")"
+echo "Script: $MERMAID_SCRIPT"
+```
+
+### Step G2 — Write the Mermaid diagram and render to PNG
+
+Write the diagram the user described (or generate an appropriate one), save it to a
+temp `.mmd` file, and render:
+
+```bash
+cat > /tmp/diagram.mmd << 'MERMAID'
+flowchart LR
+    A[Start] --> B{Decision}
+    B -->|Yes| C[Action]
+    B -->|No| D[End]
+MERMAID
+
+python3 "$MERMAID_SCRIPT" --input /tmp/diagram.mmd --output /tmp/diagram.png --theme default
+ls -lh /tmp/diagram.png
+```
+
+Themes: `default` (white bg), `dark`, `forest`, `neutral`. Use `default` for
+light-background documents.
+
+### Step G3 — Embed the PNG at the target paragraph
+
+```python
+from docx import Document
+from docx.shared import Inches
+from lxml import etree
+
+doc = Document(file_path)
+body = doc.element.body
+
+# Inspect paragraph count if you need to pick the insertion index
+print(f"Total paragraphs: {len(doc.paragraphs)}")
+
+# Add the picture paragraph (python-docx appends to end first)
+img_para = doc.add_paragraph()
+run = img_para.add_run()
+run.add_picture("/tmp/diagram.png", width=Inches(5.5))  # adjust width to taste
+
+# Optionally centre the image paragraph
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+img_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+# Move element to correct position (insert AFTER paragraph N)
+anchor = doc.paragraphs[N]._element
+body.remove(img_para._element)
+idx = list(body).index(anchor) + 1
+body.insert(idx, img_para._element)
+
+doc.save(file_path)
+print("Diagram embedded.")
+```
+
+**Width guidance** — pick based on document margins and diagram complexity:
+
+| Diagram type | Recommended width |
+|---|---|
+| Simple flowchart / sequence | `Inches(5.5)` |
+| Wide ERD or multi-lane swimlane | `Inches(6.5)` |
+| Small icon / status diagram | `Inches(3.0)` |
+
+### Step G4 — Verify
+
+Run Section D's verify snippet to confirm paragraph count increased and the image
+paragraph appears at the right index, then run Section F to visually confirm.
 
 ---
 

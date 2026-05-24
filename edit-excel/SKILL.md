@@ -1,11 +1,11 @@
 ---
 name: edit-excel
-version: 2.0.0
+version: 2.1.0
 description: |
-  Add sheets, write data, and edit existing content in .xlsx files while matching
-  the original file's styling (fonts, fills, column widths, borders, alignment).
-  Enforces formula-first best practices and recalculates formulas via LibreOffice.
-  Use when asked to "add a sheet", "write data to Excel", "update", or "edit" an xlsx file.
+  Add sheets, write data, edit existing content, and embed Mermaid diagrams in .xlsx
+  files while matching the original file's styling (fonts, fills, column widths, borders,
+  alignment). Enforces formula-first best practices and recalculates formulas via LibreOffice.
+  Use when asked to "add a sheet", "write data to Excel", "update", "edit", or "add a diagram".
 dependencies:
   - openpyxl==3.1.5
   - pandas
@@ -235,6 +235,65 @@ Report what was added/changed to the user.
 
 ---
 
+---
+
+## Step 6 — Embed Mermaid Diagram as Image (optional)
+
+Use this when the user wants a flowchart, architecture diagram, or process diagram
+embedded directly in a sheet (useful for documentation-style workbooks, e.g. a PRD
+tracker or architecture reference sheet).
+
+### Locate and run the shared render script
+
+```bash
+MERMAID_SCRIPT="$(python3 -c "
+import pathlib, sys
+candidates = [
+    pathlib.Path.home() / '.claude/skills/mermaid/mermaid-render.py',
+    pathlib.Path('mermaid/mermaid-render.py'),
+]
+found = next((str(p) for p in candidates if p.exists()), None)
+print(found or sys.exit('mermaid-render.py not found — run install.sh first'))
+")"
+
+cat > /tmp/diagram.mmd << 'MERMAID'
+flowchart LR
+    A[Input] --> B[Process] --> C[Output]
+MERMAID
+
+python3 "$MERMAID_SCRIPT" --input /tmp/diagram.mmd --output /tmp/diagram.png --theme default
+ls -lh /tmp/diagram.png
+```
+
+### Embed the PNG into the workbook
+
+```python
+from openpyxl import load_workbook
+from openpyxl.drawing.image import Image as XLImage
+
+wb = load_workbook(file_path)
+ws = wb["Sheet1"]  # target sheet
+
+img = XLImage("/tmp/diagram.png")
+# Scale to fit — keep aspect ratio; 96 px/in is Excel's internal resolution
+img.width  = 480   # pixels wide  (~5 inches)
+img.height = 300   # pixels tall  (adjust to match rendered PNG aspect ratio)
+ws.add_image(img, "B5")  # top-left corner anchor cell
+
+wb.save(file_path)
+print("Diagram embedded.")
+```
+
+**Sizing guidance** — inspect the rendered PNG dimensions first:
+
+```bash
+python3 -c "from PIL import Image; i=Image.open('/tmp/diagram.png'); print(i.size)"
+```
+
+Scale proportionally: if PNG is 800×500 and you want 480px wide → height = `500 * 480 // 800 = 300`.
+
+---
+
 ## Common pitfalls
 
 | Symptom | Cause | Fix |
@@ -244,3 +303,4 @@ Report what was added/changed to the user.
 | Column widths ignored | Setting before `create_sheet()` | Set widths after creating the sheet |
 | Old values persist on reload | `data_only=True` caches stale results | Only use `data_only=True` for reads |
 | Formulas show as strings in Excel | Not recalculated after save | Run `recalc.py` after saving |
+| Embedded image not visible | Image anchor cell hidden/filtered | Check cell visibility and row/col widths |
